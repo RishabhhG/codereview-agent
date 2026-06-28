@@ -2,3 +2,4 @@
 .env
 *.pem
 __pycache__/
+logs/
