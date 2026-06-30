@@ -12,6 +12,8 @@ from services.llm_client import chat
 from services.review_prompt import SYSTEM_PROMPT, build_user_prompt, build_rag_context_block, parse_verdict
 from services.github_comments import post_pr_review
 from services.retriever import search_chunks
+from agent.state import ReviewState
+from agent.orchestrator import run_agent_review
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ if not _secret:
 SECRET = _secret.encode()
 
 USE_RAG_CONTEXT = os.getenv("USE_RAG_CONTEXT", "false").lower() == "true"
+USE_AGENT_REVIEW = os.getenv("USE_AGENT_REVIEW", "false").lower() == "true"
 
 
 @router.post("/webhook")
@@ -84,34 +87,101 @@ async def github_webhook(request: Request):
             f["additions"], f["deletions"], len(f["patch"].splitlines()),
         )
         if f["truncated"]:
-            logger.warning("Patch truncated at 800 lines: %s", f["filename"])
+            logger.warning(
+                "Patch truncated at 800 lines: %s",
+                f["filename"],
+            )
 
-    # --- RAG retrieval (feature-flagged) ---
-    rag_context = ""
-    if USE_RAG_CONTEXT:
-        repo_identifier = f"{owner}/{repo}"
-        # Build a query from changed filenames — a simple but effective heuristic
-        query = " ".join(f["filename"] for f in diff)
-        try:
-            chunks = await search_chunks(repo_identifier, query, top_k=5)
-            rag_context = build_rag_context_block(chunks)
-            logger.info("RAG context retrieved: %d chunks", len(chunks))
-        except Exception as e:
-            logger.warning("RAG retrieval failed, continuing without context: %s", e)
+    review = ""
+
+    if USE_AGENT_REVIEW:
+        logger.info("Using Agentic Review")
+
+        state = ReviewState(
+            repo=f"{owner}/{repo}",
+            owner=owner,
+            repo_name=repo,
+            installation_id=installation_id,
+            pr_diff=diff,
+        )
+
+        review = await run_agent_review(
+            state,
+        )
+
+        logger.info(
+        "Agent pipeline complete — context chunks: %d | related files: %d | confidence: %.2f",
+        len(state.retrieved_chunks),
+        len(state.related_files),
+        state.confidence_score or 0.0,
+    )
+
     else:
-        logger.info("RAG context disabled (USE_RAG_CONTEXT=false)")
+        rag_context = ""
 
-    user_prompt = build_user_prompt(diff, rag_context=rag_context)
-    logger.info("Calling Gemini for PR #%d... (RAG: %s)", pr_number, USE_RAG_CONTEXT)
+        if USE_RAG_CONTEXT:
+            repo_identifier = f"{owner}/{repo}"
 
-    review = await chat(SYSTEM_PROMPT, user_prompt)
+            # Simple retrieval query using changed filenames.
+            query = " ".join(
+                f["filename"] for f in diff
+            )
+
+            try:
+                chunks = await search_chunks(
+                    repo_identifier,
+                    query,
+                    top_k=5,
+                )
+
+                rag_context = build_rag_context_block(chunks)
+
+                logger.info(
+                    "RAG context retrieved: %d chunks",
+                    len(chunks),
+                )
+
+            except Exception as e:
+                logger.warning(
+                    "RAG retrieval failed, continuing without context: %s",
+                    e,
+                )
+
+        else:
+            logger.info(
+                "RAG context disabled (USE_RAG_CONTEXT=false)"
+            )
+
+        user_prompt = build_user_prompt(
+            diff,
+            rag_context=rag_context,
+        )
+
+        logger.info(
+            "Calling Gemini for PR #%d... (RAG: %s)",
+            pr_number,
+            USE_RAG_CONTEXT,
+        )
+
+        review = await chat(SYSTEM_PROMPT, user_prompt)
 
     logger.info("LLM REVIEW — PR #%d:\n%s", pr_number, review)
 
     verdict = parse_verdict(review)
+
     result = await post_pr_review(
-        installation_id, owner, repo, pr_number, review, verdict
+        installation_id,
+        owner,
+        repo,
+        pr_number,
+        review,
+        verdict,
     )
-    logger.info("Review posted — verdict: %s | review_id: %s", verdict, result.get("id"))
+
+    logger.info(
+        "Review posted — verdict: %s | review_id: %s",
+        verdict,
+        result.get("id"),
+    )
 
     return {"ok": True}
