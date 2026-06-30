@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Logging setup ---
+# --- Logging setup --- ( write logs to agent.log )
 os.makedirs("logs", exist_ok=True)
 
 logging.basicConfig(
