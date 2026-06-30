@@ -3,7 +3,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Fix 10 — don't ask for exact line numbers, Gemini will hallucinate them
 SYSTEM_PROMPT = """You are a senior software engineer conducting a thorough code review.
 Your job is to review the provided code diff and give actionable, specific feedback.
 
@@ -12,6 +11,8 @@ Follow these rules:
 - Do NOT invent exact line numbers — the diff may not include them
 - Prioritize issues by severity: Critical > Warning > Suggestion
 - Focus on: bugs, security issues, performance problems, code clarity
+- If relevant codebase context is provided, use it to check for consistency with existing
+  patterns, naming conventions, and architecture — flag deviations if they matter
 - If the code is clean, say so briefly — don't invent issues
 - Format your response exactly like this:
 
@@ -35,7 +36,6 @@ APPROVE / REQUEST_CHANGES — one line reason.
 If no issues found in a category, write "None".
 """
 
-# Fix 6 — skip generated/vendor files
 SKIP_PATTERNS = (
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     ".min.js", ".min.css", "dist/", "build/", "__generated__",
@@ -43,13 +43,32 @@ SKIP_PATTERNS = (
 )
 
 
-def build_user_prompt(diff: list[dict]) -> str:
-    prompt_parts = ["Review the following code changes:\n"]
+def build_rag_context_block(chunks: list[dict]) -> str:
+    """Format retrieved codebase chunks as context for the LLM"""
+    if not chunks:
+        return ""
+
+    parts = ["## Relevant Codebase Context\n",
+             "The following existing code patterns from this repo may be relevant:\n"]
+
+    for c in chunks:
+        parts.append(f"### {c['file_path']} (similarity: {c['similarity']:.2f})\n```\n{c['chunk_text']}\n```")
+
+    return "\n\n".join(parts)
+
+
+def build_user_prompt(diff: list[dict], rag_context: str = "") -> str:
+    prompt_parts = []
+
+    if rag_context:
+        prompt_parts.append(rag_context)
+        prompt_parts.append("\n---\n")
+
+    prompt_parts.append("Review the following code changes:\n")
 
     for f in diff:
         filename = f["filename"]
 
-        # Fix 6 — skip generated/vendor files
         if any(pattern in filename for pattern in SKIP_PATTERNS):
             logger.info("Skipping generated/vendor file: %s", filename)
             continue
@@ -73,7 +92,6 @@ def build_user_prompt(diff: list[dict]) -> str:
 
 
 def parse_verdict(llm_response: str) -> str:
-    # Fix 5 — regex instead of fragile string split
     match = re.search(r"\b(APPROVE|REQUEST_CHANGES)\b", llm_response, re.IGNORECASE)
     if match:
         return match.group(1).upper()
