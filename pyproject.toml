@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codereview-agent"
+version = "0.1.0"
+description = "AI-powered code review agent"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "python-dotenv",
+    "PyJWT",
+    "cryptography",
+    "google-generativeai",
+    "asyncpg",
+    "pgvector",
+    "tiktoken",
+    "numpy",
+    "pydantic",
+    "typer",
+    "rich",
+]
+
+[project.scripts]
+codereview-agent = "cli:app"
+
+[tool.setuptools]
+py-modules = ["cli", "ingest_repo"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent*", "services*", "routers*", "db*"]
+exclude = ["logs*", "__pycache__*"]

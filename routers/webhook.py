@@ -14,6 +14,7 @@ from services.github_comments import post_pr_review
 from services.retriever import search_chunks
 from agent.state import ReviewState
 from agent.orchestrator import run_agent_review
+from db.db_writer import save_review
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -177,6 +178,18 @@ async def github_webhook(request: Request):
         review,
         verdict,
     )
+
+    if USE_AGENT_REVIEW and hasattr(state, 'confidence_score'):
+        try:
+            pr_url = payload["pull_request"]["html_url"]
+            await save_review(
+                review=review,  # PRReview object
+                state=state,
+                pr_url=pr_url,
+                pr_number=pr_number,
+            )
+        except Exception as e:
+            logger.warning("Failed to save review to DB: %s", e)
 
     logger.info(
         "Review posted — verdict: %s | review_id: %s",

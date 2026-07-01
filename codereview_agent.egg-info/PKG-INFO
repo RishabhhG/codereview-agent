@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: codereview-agent
+Version: 0.1.0
+Summary: AI-powered code review agent
+Requires-Python: >=3.11
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: httpx
+Requires-Dist: python-dotenv
+Requires-Dist: PyJWT
+Requires-Dist: cryptography
+Requires-Dist: google-generativeai
+Requires-Dist: asyncpg
+Requires-Dist: pgvector
+Requires-Dist: tiktoken
+Requires-Dist: numpy
+Requires-Dist: pydantic
+Requires-Dist: typer
+Requires-Dist: rich

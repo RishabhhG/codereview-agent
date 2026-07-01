@@ -15,6 +15,7 @@ class ReviewState:
     repo_name: str
     installation_id: int
     pr_diff: list[dict] = field(default_factory=list)
+    pr_review: object = None   # stores PRReview after review_agent runs
 
     # --- Context gathered during the review ---
     retrieved_chunks: list[dict] = field(default_factory=list)

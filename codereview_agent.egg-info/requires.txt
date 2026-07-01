@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+httpx
+python-dotenv
+PyJWT
+cryptography
+google-generativeai
+asyncpg
+pgvector
+tiktoken
+numpy
+pydantic
+typer
+rich
