@@ -10,7 +10,9 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY is not set")
 
-EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-001")
+# Default is the 3072-dim model, matching VECTOR(3072) in db/schema.sql.
+# If you change this, update the code_chunks embedding dimension to match.
+EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "models/gemini-embedding-001")
 
 genai.configure(api_key=API_KEY)
 

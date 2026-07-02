@@ -52,15 +52,24 @@ async def _get_file_text(repo: str, file_path: str) -> str:
 # tool_runner.py injects state automatically — it's NOT part of the LLM-facing schema.
 # ---------------------------------------------------------------------------
 
-async def search_codebase(state, query: str, top_k: int = 5) -> list[dict]:
+def _citation_fields(r: dict) -> dict:
+    """Common projection: chunk text + citation metadata (path/function/lines)."""
+    return {
+        "file_path": r["file_path"],
+        "function_name": r.get("function_name"),
+        "start_line": r.get("start_line"),
+        "end_line": r.get("end_line"),
+        "chunk_text": r["chunk_text"],
+        "similarity": round(r["similarity"], 3),
+    }
+
+
+async def search_codebase(state, query: str, top_k: int = 5, path_filter: list[str] | None = None) -> list[dict]:
     """Semantic search over the indexed codebase for code relevant to `query`."""
-    results = await search_chunks(state.repo, query, top_k=top_k)
-    logger.info("search_codebase('%s') -> %d results: %s",
-                query, len(results), [r["file_path"] for r in results])
-    return [
-        {"file_path": r["file_path"], "chunk_text": r["chunk_text"], "similarity": round(r["similarity"], 3)}
-        for r in results
-    ]
+    results = await search_chunks(state.repo, query, top_k=top_k, path_filter=path_filter)
+    logger.info("search_codebase('%s', path_filter=%s) -> %d results: %s",
+                query, path_filter, len(results), [r["file_path"] for r in results])
+    return [_citation_fields(r) for r in results]
 
 
 async def fetch_file(state, path: str) -> dict:
@@ -138,7 +147,4 @@ async def search_docs(state, query: str, top_k: int = 5) -> list[dict]:
     if not filtered:
         logger.info("search_docs: no doc-like chunks matched '%s' — are docs ingested?", query)
 
-    return [
-        {"file_path": r["file_path"], "chunk_text": r["chunk_text"], "similarity": round(r["similarity"], 3)}
-        for r in filtered
-    ]
+    return [_citation_fields(r) for r in filtered]

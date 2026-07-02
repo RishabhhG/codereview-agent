@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from db.connection import get_pool, close_pool
+from db.connection import get_pool, close_pool, init_db
 from services.chunker import split_into_chunks, SUPPORTED_EXTENSIONS
 
 logging.basicConfig(
@@ -87,6 +87,7 @@ def main():
 
 async def _run(repo_path: str, repo_name: str):
     await get_pool()
+    await init_db()  # ensure code_chunks citation columns / chat tables exist
     try:
         await ingest_repo(repo_path, repo_name)
     finally:

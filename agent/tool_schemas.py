@@ -23,6 +23,14 @@ TOOL_SCHEMAS = [
                 "top_k": {
                     "type": "integer",
                     "description": "Number of results to return (default 5)."
+                },
+                "path_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional list of repo-relative file paths to restrict the search to. "
+                        "Use when the user pinned specific files (e.g. @services/foo.py)."
+                    )
                 }
             },
             "required": ["query"]

@@ -1,7 +1,19 @@
 import asyncio
+import logging
+import re
+import warnings
+
 import typer
-from rich.console import Console
+from rich.box import ROUNDED
+from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
+
+# Quieten third-party noise so the chat output stays readable.
+warnings.filterwarnings("ignore", category=FutureWarning)
+logging.getLogger("dotenv.main").setLevel(logging.ERROR)
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -97,43 +109,247 @@ def _detect_language(file_path: str) -> str:
 
 @app.command()
 def chat(
-    question: str = typer.Argument(..., help="Question about the codebase"),
+    question: str = typer.Argument(None, help="Question about the codebase. Omit to start an interactive session."),
     repo: str = typer.Option(..., "--repo", help="e.g. RishabhhG/codereview-agent"),
+    session: str = typer.Option("default", "--session", "-s", help="Conversation memory id — reuse to keep context across runs."),
 ):
-    """Ask a question about a codebase."""
-    asyncio.run(_chat(repo, question))
+    """
+    Ask questions about a codebase. Streams the answer with source citations,
+    inline code snippets, and (for how-does-X questions) an execution-flow diagram.
+
+    Supports @path/to/file.py and #symbol references to scope the search.
+    With no QUESTION argument, opens an interactive multi-turn session.
+    """
+    asyncio.run(_chat_entry(repo, question, session))
 
 
-async def _chat(repo: str, question: str):
-    from db.connection import get_pool, close_pool
-    from services.retriever import search_chunks
-    from services.llm_client import chat as llm_chat
+async def _chat_entry(repo: str, question: str | None, session: str):
+    from db.connection import get_pool, close_pool, init_db
+    from db.chat_store import get_or_create_session
 
     await get_pool()
+    await init_db()
+    session_id = await get_or_create_session(session, repo)
 
-    console.print(f"[cyan]Searching codebase for context...[/cyan]")
-    chunks = await search_chunks(repo, question, top_k=5)
+    try:
+        if question:
+            await _chat_turn(repo, question, session_id)
+        else:
+            await _chat_repl(repo, session_id, session)
+    finally:
+        await close_pool()
 
-    if not chunks:
-        console.print("[yellow]No relevant chunks found — is the repo ingested?[/yellow]")
-        raise typer.Exit(1)
 
-    context = "\n\n".join(
-        f"### {c['file_path']}\n```\n{c['chunk_text']}\n```"
-        for c in chunks
+async def _chat_repl(repo: str, session_id: int, session_key: str):
+    console.print(
+        f"[bold cyan]Chat[/bold cyan] — repo [white]{repo}[/white], session [white]{session_key}[/white]. "
+        "Type your question, or [dim]exit[/dim] to quit.\n"
+        "[dim]Tip: reference files with @path/to/file.py and symbols with #function_name.[/dim]\n"
+    )
+    while True:
+        try:
+            question = (await asyncio.to_thread(console.input, "[bold green]you ›[/bold green] ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]bye[/dim]")
+            return
+        if not question:
+            continue
+        if question.lower() in {"exit", "quit", ":q"}:
+            console.print("[dim]bye[/dim]")
+            return
+        await _chat_turn(repo, question, session_id)
+        console.print()
+
+
+async def _chat_turn(repo: str, question: str, session_id: int):
+    from agent.chat_agent import run_chat
+    from db.chat_store import save_message
+
+    final_text = ""
+    citations: list[dict] = []
+    acc = ""
+
+    # Show a spinner while the agent works instead of streaming a growing
+    # Markdown preview. Rendering the answer only once — after it is complete —
+    # is what keeps long answers from being re-drawn (duplicated) on the
+    # terminal when they overflow the screen height.
+    with console.status("[bold cyan]Thinking…[/bold cyan]", spinner="dots") as status:
+        async for ev in run_chat(repo, question, session_id=session_id):
+            if ev["type"] == "tool":
+                console.print(f"[dim]🔍 {', '.join(ev['calls'])} …[/dim]")
+                status.update("[bold cyan]Reading the code…[/bold cyan]")
+            elif ev["type"] == "text":
+                acc += ev["text"]
+                status.update(
+                    f"[bold cyan]Writing answer…[/bold cyan] [dim]{len(acc)} chars[/dim]"
+                )
+            elif ev["type"] == "final":
+                final_text = ev["text"]
+                citations = ev["citations"]
+
+    _render_answer(final_text or acc)
+    if citations:
+        _render_sources(citations)
+
+    # Persist the turn so follow-up questions reuse context
+    await save_message(session_id, "user", question)
+    await save_message(session_id, "assistant", final_text, citations)
+
+
+# Mermaid code fences aren't rendered by Rich's Markdown, so we pull them out
+# and draw them as their own panel.
+_MERMAID_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
+
+
+def _clean_markdown(text: str) -> str:
+    """Normalize the model's Markdown so Rich renders it correctly.
+
+    The model frequently over-indents list content and code fences. CommonMark
+    treats any line indented 4+ spaces as a *literal indented code block*, which
+    is why `**bold**` and ``` fences leak through as raw characters. We flatten
+    prose to the left margin and dedent fenced code blocks to column 0.
+    """
+    out: list[str] = []
+    in_fence = False
+    fence_indent = 0
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip()
+            if not in_fence:
+                if not lang:
+                    # A bare ``` with no block open is an orphan (the model
+                    # often drops the opening fence and leaves a stray close).
+                    # Skip it so it can't spuriously open a block that swallows
+                    # the rest of the answer as literal code.
+                    continue
+                in_fence = True
+                fence_indent = len(line) - len(stripped)
+                out.append("```" + lang)  # opening fence to column 0
+            else:
+                in_fence = False
+                out.append("```")  # closing fence to column 0
+            continue
+        if in_fence:
+            # Drop the fence's own indent but keep indentation *within* the code.
+            if line[:fence_indent].strip() == "":
+                out.append(line[fence_indent:])
+            else:
+                out.append(stripped)
+        else:
+            out.append(stripped)
+    return "\n".join(out)
+
+
+def _render_answer(text: str) -> None:
+    """Render the assistant's answer as a titled panel, with any Mermaid
+    flow diagram broken out into its own nicely-formatted panel."""
+    if not text.strip():
+        console.print("[yellow]No answer was produced.[/yellow]")
+        return
+
+    text = _clean_markdown(text)
+
+    segments: list[tuple[str, str]] = []
+    last = 0
+    for m in _MERMAID_RE.finditer(text):
+        segments.append(("md", text[last:m.start()]))
+        segments.append(("flow", m.group(1).strip()))
+        last = m.end()
+    segments.append(("md", text[last:]))
+
+    renderables = []
+    for kind, seg in segments:
+        if kind == "md" and seg.strip():
+            renderables.append(Markdown(seg))
+        elif kind == "flow":
+            renderables.append(_render_flow(seg))
+
+    console.print()
+    console.print(
+        Panel(
+            Group(*renderables),
+            title="[bold]💬 Answer[/bold]",
+            border_style="cyan",
+            box=ROUNDED,
+            padding=(1, 2),
+        )
     )
 
-    system_prompt = """You are a helpful assistant that answers questions about a codebase.
-Use the provided code context to answer accurately. Reference specific files and functions.
-If the context doesn't contain enough information, say so clearly."""
 
-    user_prompt = f"## Codebase Context\n{context}\n\n## Question\n{question}"
+def _render_flow(code: str):
+    """Turn a Mermaid `flowchart` into a readable arrow-chain panel."""
+    label_re = re.compile(r'([A-Za-z0-9_]+)\s*[\[\({]+\s*"?(.*?)"?\s*[\]\)}]+')
+    labels: dict[str, str] = {}
+    for m in label_re.finditer(code):
+        labels[m.group(1)] = m.group(2).strip() or m.group(1)
 
-    console.print(f"[cyan]Thinking...[/cyan]\n")
-    answer = await llm_chat(system_prompt, user_prompt)
-    console.print(Markdown(answer))
+    def label_of(token: str) -> str:
+        token = token.strip()
+        idm = re.match(r"([A-Za-z0-9_]+)", token)
+        if not idm:
+            return token
+        return labels.get(idm.group(1), idm.group(1))
 
-    await close_pool()
+    steps: list[list[str]] = []
+    for raw in code.splitlines():
+        line = raw.strip().rstrip(";")
+        if "-->" not in line:
+            continue
+        line = re.sub(r"\|[^|]*\|", "", line)  # drop edge labels like -->|text|
+        sides = [s.strip() for s in line.split("-->")]
+        steps.append(
+            [" & ".join(label_of(n) for n in side.split("&") if n.strip()) for side in sides]
+        )
+
+    if not steps:
+        from rich.syntax import Syntax
+
+        return Panel(
+            Syntax(code, "text", word_wrap=True),
+            title="[bold]🔀 Execution flow[/bold]",
+            border_style="magenta",
+            box=ROUNDED,
+            padding=(1, 2),
+        )
+
+    body = Text()
+    for i, sides in enumerate(steps):
+        if i:
+            body.append("\n")
+        body.append("● ", style="bold magenta")
+        body.append_text(Text(" → ", style="bold magenta").join(Text(s) for s in sides))
+
+    return Panel(
+        body,
+        title="[bold]🔀 Execution flow[/bold]",
+        border_style="magenta",
+        box=ROUNDED,
+        padding=(1, 2),
+    )
+
+
+def _render_sources(citations: list[dict]) -> None:
+    body = Text()
+    for i, c in enumerate(citations):
+        if i:
+            body.append("\n")
+        loc = c["file_path"]
+        if c.get("start_line"):
+            loc += f":{c['start_line']}-{c['end_line']}"
+        body.append(loc, style="cyan")
+        if c.get("function_name"):
+            body.append(f"  {c['function_name']}", style="dim")
+
+    console.print(
+        Panel(
+            body,
+            title="[bold]📚 Sources[/bold]",
+            border_style="green",
+            box=ROUNDED,
+            padding=(1, 2),
+        )
+    )
 
 
 if __name__ == "__main__":

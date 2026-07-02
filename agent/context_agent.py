@@ -16,7 +16,7 @@ async def _get_chunks_for_file(repo: str, file_path: str) -> list[dict]:
     pool = await get_pool()
     rows = await pool.fetch(
         """
-        SELECT file_path, chunk_text, 1.0 AS similarity
+        SELECT file_path, chunk_text, start_line, end_line, function_name, 1.0 AS similarity
         FROM code_chunks
         WHERE repo = $1 AND file_path = $2
         ORDER BY id
@@ -28,6 +28,9 @@ async def _get_chunks_for_file(repo: str, file_path: str) -> list[dict]:
         {
             "file_path": row["file_path"],
             "chunk_text": row["chunk_text"],
+            "start_line": row["start_line"],
+            "end_line": row["end_line"],
+            "function_name": row["function_name"],
             "similarity": float(row["similarity"]),
             "source": "related_file_fetch"
         }

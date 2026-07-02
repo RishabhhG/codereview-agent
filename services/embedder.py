@@ -15,6 +15,25 @@ async def get_existing_checksums(repo: str, file_path: str) -> set[str]:
     return {row["checksum"] for row in rows}
 
 
+async def needs_metadata_backfill(repo: str, file_path: str) -> bool:
+    """
+    True if any stored chunk for this file is missing citation metadata
+    (start_line). Forces a re-embed of otherwise-unchanged files so the new
+    start_line/end_line/function_name columns get populated on re-ingest.
+    """
+    pool = await get_pool()
+    missing = await pool.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM code_chunks
+            WHERE repo = $1 AND file_path = $2 AND start_line IS NULL
+        )
+        """,
+        repo, file_path
+    )
+    return bool(missing)
+
+
 async def delete_file_chunks(repo: str, file_path: str):
     """Remove all chunks for a file — used before re-inserting updated chunks"""
     pool = await get_pool()
@@ -29,10 +48,13 @@ async def store_chunk(repo: str, chunk: dict, embedding: list[float]):
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
     await pool.execute(
         """
-        INSERT INTO code_chunks (repo, file_path, chunk_text, embedding, checksum)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO code_chunks
+            (repo, file_path, chunk_text, embedding, checksum,
+             start_line, end_line, function_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """,
-        repo, chunk["file_path"], chunk["chunk_text"], embedding_str, chunk["checksum"]
+        repo, chunk["file_path"], chunk["chunk_text"], embedding_str, chunk["checksum"],
+        chunk.get("start_line"), chunk.get("end_line"), chunk.get("function_name"),
     )
 
 
@@ -48,10 +70,14 @@ async def embed_and_store_file(repo: str, file_path: str, chunks: list[dict]) ->
     existing_checksums = await get_existing_checksums(repo, file_path)
     new_checksums = {c["checksum"] for c in chunks}
 
-    # File completely unchanged — every chunk checksum already exists
+    # File completely unchanged — every chunk checksum already exists.
+    # Still re-embed if stored rows predate the citation-metadata columns.
     if new_checksums == existing_checksums:
-        logger.info("Unchanged, skipping: %s", file_path)
-        return {"embedded": 0, "skipped": len(chunks)}
+        if await needs_metadata_backfill(repo, file_path):
+            logger.info("Unchanged but missing citation metadata, re-embedding: %s", file_path)
+        else:
+            logger.info("Unchanged, skipping: %s", file_path)
+            return {"embedded": 0, "skipped": len(chunks)}
 
     # File changed — delete old chunks, re-embed everything for this file
     # (Simpler and safer than partial diffing chunk-by-chunk)
