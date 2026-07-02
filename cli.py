@@ -200,6 +200,22 @@ async def _chat_turn(repo: str, question: str, session_id: int):
 # and draw them as their own panel.
 _MERMAID_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
 
+# A Mermaid node definition: `id` followed by a bracket-pair label. Each shape is
+# matched against its OWN closing bracket so a label containing "(" — e.g.
+# `X[Find files (blast radius)]` — isn't truncated at the first ")".
+# Longer/compound bracket shapes are listed before single ones so they win.
+_NODE_DEF_RE = re.compile(
+    r"([A-Za-z0-9_]+)\s*(?:"
+    r"\[\[(.*?)\]\]"      # [[subroutine]]
+    r"|\[\((.*?)\)\]"     # [(cylinder)]
+    r"|\(\[(.*?)\]\)"     # ([stadium])
+    r"|\{\{(.*?)\}\}"     # {{hexagon}}
+    r"|\[(.*?)\]"         # [rectangle]
+    r"|\((.*?)\)"         # (rounded)
+    r"|\{(.*?)\}"         # {rhombus}
+    r")"
+)
+
 
 def _clean_markdown(text: str) -> str:
     """Normalize the model's Markdown so Rich renders it correctly.
@@ -278,11 +294,20 @@ def _render_answer(text: str) -> None:
 
 
 def _render_flow(code: str):
-    """Turn a Mermaid `flowchart` into a readable arrow-chain panel."""
-    label_re = re.compile(r'([A-Za-z0-9_]+)\s*[\[\({]+\s*"?(.*?)"?\s*[\]\)}]+')
+    """Render a Mermaid `flowchart` as a readable arrow-chain plus the raw
+    Mermaid source (so it can be copied into a real diagram renderer)."""
+    from rich.rule import Rule
+    from rich.syntax import Syntax
+
+    code = code.strip()
+
+    # id -> label, parsed with bracket-aware matching so "(...)" inside a [...]
+    # label survives intact.
     labels: dict[str, str] = {}
-    for m in label_re.finditer(code):
-        labels[m.group(1)] = m.group(2).strip() or m.group(1)
+    for m in _NODE_DEF_RE.finditer(code):
+        node_id = m.group(1)
+        label = next((g for g in m.groups()[1:] if g is not None), "")
+        labels[node_id] = label.strip().strip('"').strip() or node_id
 
     def label_of(token: str) -> str:
         token = token.strip()
@@ -298,31 +323,44 @@ def _render_flow(code: str):
             continue
         line = re.sub(r"\|[^|]*\|", "", line)  # drop edge labels like -->|text|
         sides = [s.strip() for s in line.split("-->")]
+        # `A & B` (with surrounding spaces) is Mermaid's "both A and B" join.
         steps.append(
-            [" & ".join(label_of(n) for n in side.split("&") if n.strip()) for side in sides]
+            [" and ".join(label_of(n) for n in re.split(r"\s+&\s+", side) if n.strip())
+             for side in sides]
         )
 
-    if not steps:
-        from rich.syntax import Syntax
+    source_block = Syntax(code, "text", theme="ansi_dark", word_wrap=True,
+                          background_color="default")
 
+    if not steps:
+        # Not a flowchart we can flatten (e.g. sequenceDiagram) — show the source.
         return Panel(
-            Syntax(code, "text", word_wrap=True),
-            title="[bold]🔀 Execution flow[/bold]",
+            source_block,
+            title="[bold]🔀 Mermaid diagram[/bold]",
             border_style="magenta",
             box=ROUNDED,
             padding=(1, 2),
         )
 
-    body = Text()
+    flow = Text()
     for i, sides in enumerate(steps):
         if i:
-            body.append("\n")
-        body.append("● ", style="bold magenta")
-        body.append_text(Text(" → ", style="bold magenta").join(Text(s) for s in sides))
+            flow.append("\n")
+        flow.append("● ", style="bold magenta")
+        flow.append_text(Text(" → ", style="bold magenta").join(Text(s) for s in sides))
+
+    body = Group(
+        flow,
+        Rule(style="magenta"),
+        Text("Mermaid source — paste into mermaid.live or a Markdown viewer to "
+             "render as a diagram:", style="dim italic"),
+        source_block,
+    )
 
     return Panel(
         body,
         title="[bold]🔀 Execution flow[/bold]",
+        subtitle="[dim]text view + Mermaid source[/dim]",
         border_style="magenta",
         box=ROUNDED,
         padding=(1, 2),

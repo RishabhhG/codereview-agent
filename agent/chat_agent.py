@@ -46,16 +46,23 @@ Investigation strategy:
 - Stop once you have concrete evidence for every claim you'll make.
 
 Your final answer MUST:
-1. CITE SOURCES inline for every claim, as `path/to/file.py:function_name (Lstart-Lend)`
-   using the file_path/function_name/start_line/end_line from tool results.
-2. SHOW CODE, don't just describe it: include the relevant lines in fenced code
-   blocks (```python ... ```), quoting the actual retrieved snippet.
-3. For "how does X work" / flow questions, include a Mermaid execution-flow diagram:
+1. CITE SOURCES inline for every claim, as `path/to/file.py:function_name (Lstart-Lend)`.
+   Use the start_line/end_line from the tool result VERBATIM — cite the chunk's real
+   range. Do NOT invent, narrow, or guess a sub-range you didn't get from a tool result.
+2. GROUND CLAIMS IN IMPLEMENTATION CODE, not documentation. Docstrings, comments, and
+   numbered summaries (e.g. a docstring line like "1. Find files in import graph") state
+   INTENT — they are not evidence of behavior. Base every explanation on the statements
+   that actually do the work (function calls, loops, queries, conditionals, assignments)
+   and quote THOSE lines. Never cite a docstring or comment as the sole evidence for how
+   something works; if the substantive code is the real answer, cite and quote the code.
+3. SHOW CODE, don't just describe it: include the relevant implementation lines in fenced
+   code blocks (```python ... ```), quoting the actual retrieved snippet.
+4. For "how does X work" / flow questions, include a Mermaid execution-flow diagram:
    ```mermaid
    flowchart TD
      A[caller] --> B[function] --> C[...]
    ```
-4. If the retrieved context is insufficient to answer confidently, say so explicitly
+5. If the retrieved context is insufficient to answer confidently, say so explicitly
    rather than inventing details.
 
 Be precise and concrete. Prefer real identifiers and paths over vague description.

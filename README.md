@@ -1,5 +1,11 @@
 # CodeReview AI Agent
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Powered by Gemini](https://img.shields.io/badge/LLM-Google%20Gemini-4285F4.svg)](https://ai.google.dev/)
+[![Vector store: pgvector](https://img.shields.io/badge/vector%20store-pgvector-336791.svg)](https://github.com/pgvector/pgvector)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 An AI-powered code review and codebase Q&A agent built on **RAG** (retrieval-augmented generation) over your source code. It can:
 
 - 🔎 **Chat with your codebase** — ask "how does X work?" and get answers with **inline source citations**, real code snippets, and **Mermaid execution-flow diagrams**.
@@ -7,6 +13,21 @@ An AI-powered code review and codebase Q&A agent built on **RAG** (retrieval-aug
 - 🤖 **Auto-review GitHub PRs** — a FastAPI webhook receives PR events (as a GitHub App), runs the review, and posts comments back.
 
 It uses **Google Gemini** for generation and embeddings, and **Postgres + pgvector** as the vector store.
+
+---
+
+## Demo
+
+**Chat** — grounded answers with citations and an execution-flow diagram:
+
+![Chat feature in the terminal](docs/images/chat-demo.svg)
+
+**Review** — a structured verdict with risk score and categorized findings:
+
+![Review feature in the terminal](docs/images/review-demo.svg)
+
+> Screenshots are generated from the real CLI rendering code via
+> [`scripts/generate_screenshots.py`](scripts/generate_screenshots.py).
 
 ---
 
@@ -275,4 +296,20 @@ codereview-agent/
 
 - The Gemini generation model is `gemini-2.5-flash` (`services/llm_client.py`).
 - Server logs are written to `logs/agent.log`.
-- The project currently uses the `google-generativeai` SDK, which is deprecated upstream in favor of `google-genai`; migration is a known follow-up.
+- The project currently uses the `google-generativeai` SDK, which is deprecated upstream in favor of `google-genai`; migration is a known follow-up (see the [Roadmap](ROADMAP.md)).
+
+---
+
+## Contributing
+
+Contributions are welcome! See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the dev
+setup, conventions, and PR process. Please also read the
+**[Code of Conduct](CODE_OF_CONDUCT.md)**.
+
+- 🗺️ **[Roadmap](ROADMAP.md)** — where the project is headed.
+- 📝 **[Changelog](CHANGELOG.md)** — notable changes per release.
+- 🔒 **[Security policy](SECURITY.md)** — how to report vulnerabilities.
+
+## License
+
+Released under the **[MIT License](LICENSE)** © 2026 Rishabh Gupta.
